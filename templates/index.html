@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Шлімак</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+
+    <div class="container">
+        
+        <div class="options-row">
+            <div class="card option-card">
+                <div class="label-with-icon">
+                    <i class="fa-solid fa-brain icon-blue"></i>
+                    <span>LLM Model</span>
+                </div>
+                <select id="model-select">
+                    <option value="gemini-2.0-flash">Gemini 2.0 Flash</option>
+                </select>
+            </div>
+
+            <div class="card option-card">
+                <div class="label-with-icon">
+                    <i class="fa-solid fa-microphone icon-purple"></i>
+                    <span>Voice</span>
+                </div>
+                <select id="voice-select">
+                    <option value="en-US-ChristopherNeural" selected>🇺🇸 Christopher (Male - Default)</option>
+                    <option value="en-US-JennyNeural">🇺🇸 Jenny (Female)</option>
+                    <option value="en-GB-RyanNeural">🇬🇧 Ryan (Male - British)</option>
+                    
+                    <option value="uk-UA-OstapNeural">🇺🇦 Остап (Чол)</option>
+                    <option value="uk-UA-PolinaNeural">🇺🇦 Поліна (Жін)</option>
+                    
+                    <option value="de-DE-ChristophNeural">🇩🇪 Christoph (Male)</option>
+                    <option value="de-DE-KillianNeural">🇩🇪 Killian (Male)</option>
+                    <option value="de-DE-KatjaNeural">🇩🇪 Katja (Female)</option>
+
+                    <option value="pl-PL-MarekNeural">🇵🇱 Marek (Male)</option>
+                    
+                    <option value="fr-FR-HenriNeural">🇫🇷 Henri (Male)</option>
+                </select>
+            </div>
+        </div>
+
+        <div class="card text-card" style="margin-bottom: 20px;">
+            <div class="label-with-icon">
+                <i class="fa-solid fa-wand-magic-sparkles icon-purple"></i>
+                <span>AI Instruction (System Prompt)</span>
+            </div>
+            <textarea id="custom-prompt" style="height: 80px;">Translate the following text to English and rewrite it to make it sound natural and engaging. Return ONLY the raw text.</textarea>
+        </div>
+
+        <div class="card text-card">
+            <div class="label-with-icon">
+                <i class="fa-solid fa-file-lines icon-green"></i>
+                <span>Text</span>
+            </div>
+            <textarea id="story-text" placeholder="Your text" oninput="updateCount()"></textarea>
+            <div class="char-count">Symbols: <span id="char-counter">0</span></div>
+        </div>
+
+        <button id="generate-btn" onclick="generateVideo()">
+            <span id="btn-text"><i class="fa-solid fa-music"></i> Generate Audio</span>
+            <div id="loader" class="loader" style="display: none;"></div>
+        </button>
+
+        <a id="download-link" style="display: none;"></a>
+        
+        <!-- Додано: Блок для відображення часу -->
+        <div id="execution-time" style="text-align: center; margin-top: 10px; color: #666; font-size: 0.9em; font-family: monospace;"></div>
+
+    </div>
+
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html>

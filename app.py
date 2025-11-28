@@ -31,15 +31,29 @@ if platform.system() == 'Windows':
 # --- ФУНКЦІЇ ---
 
 async def save_audio(text, filename, voice):
-    """Зберігає аудіо. Викидає помилку, якщо текст пустий."""
+    """Зберігає аудіо з повторними спробами (Retry mechanism)."""
     if not text or not text.strip():
         print("❌ ПОМИЛКА: Текст для озвучки пустий!")
         raise ValueError("Text cannot be empty for TTS generation.")
     
     print(f"🎙️ Починаю генерацію аудіо (перші 50 симв.): {text[:50]}...")
-    communicate = edge_tts.Communicate(text, voice)
-    await communicate.save(filename)
-    print(f"✅ Аудіо збережено: {filename}")
+    
+    # 🔄 МЕХАНІЗМ ПОВТОРНИХ СПРОБ (3 рази)
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            communicate = edge_tts.Communicate(text, voice)
+            await communicate.save(filename)
+            print(f"✅ Аудіо успішно збережено: {filename}")
+            return # Якщо все ок — виходимо з функції
+        except Exception as e:
+            print(f"⚠️ Помилка генерації (Спроба {attempt + 1}/{max_retries}): {e}")
+            if attempt < max_retries - 1:
+                await asyncio.sleep(1) # Чекаємо 1 секунду перед наступною спробою
+            else:
+                # Якщо це була остання спроба — кидаємо помилку далі
+                print("❌ Всі спроби вичерпано.")
+                raise e
 
 def call_gemini(text, instruction):
     """Викликає Gemini API."""

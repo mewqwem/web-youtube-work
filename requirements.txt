@@ -1,5 +1,5 @@
 flask
-edge-tts
+edge-tts>=6.1.9
 google-generativeai
 openai
 python-dotenv

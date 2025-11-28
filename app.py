@@ -31,7 +31,7 @@ if platform.system() == 'Windows':
 # --- ФУНКЦІЇ ---
 
 async def save_audio(text, filename, voice):
-    """Зберігає аудіо з повторними спробами (Retry mechanism)."""
+    """Зберігає аудіо через потік (Stream) — це найнадійніший метод для Render."""
     if not text or not text.strip():
         print("❌ ПОМИЛКА: Текст для озвучки пустий!")
         raise ValueError("Text cannot be empty for TTS generation.")
@@ -43,15 +43,27 @@ async def save_audio(text, filename, voice):
     for attempt in range(max_retries):
         try:
             communicate = edge_tts.Communicate(text, voice)
-            await communicate.save(filename)
+            
+            # ВІДКРИВАЄМО ФАЙЛ І ЗАПИСУЄМО ПОТОКОМ (Chunk-by-chunk)
+            # Це надійніше, ніж communicate.save(), бо ми контролюємо процес
+            received_data = False
+            with open(filename, "wb") as f:
+                async for chunk in communicate.stream():
+                    if chunk["type"] == "audio":
+                        f.write(chunk["data"])
+                        received_data = True
+            
+            if not received_data:
+                raise Exception("Microsoft не надіслав жодних даних (пустий потік).")
+                
             print(f"✅ Аудіо успішно збережено: {filename}")
-            return # Якщо все ок — виходимо з функції
+            return # Успіх
+            
         except Exception as e:
             print(f"⚠️ Помилка генерації (Спроба {attempt + 1}/{max_retries}): {e}")
             if attempt < max_retries - 1:
-                await asyncio.sleep(1) # Чекаємо 1 секунду перед наступною спробою
+                await asyncio.sleep(1.5) # Чекаємо трохи довше
             else:
-                # Якщо це була остання спроба — кидаємо помилку далі
                 print("❌ Всі спроби вичерпано.")
                 raise e
 

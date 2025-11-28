@@ -2,12 +2,12 @@ from flask import Flask, render_template, request, jsonify, send_file
 import os
 import asyncio
 import datetime
-import platform
+import uuid
 from dotenv import load_dotenv
 import google.generativeai as genai
-from google.generativeai.types import HarmCategory, HarmBlockThreshold
 from openai import OpenAI
 import edge_tts
+import platform
 
 app = Flask(__name__)
 
@@ -16,57 +16,48 @@ load_dotenv()
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 GROK_API_KEY = os.getenv("GROK_API_KEY")
 
-# Налаштування Gemini
+# Налаштування Gemini (якщо є ключ)
 if GOOGLE_API_KEY:
-    genai.configure(api_key=GOOGLE_API_KEY)
+    try:
+        genai.configure(api_key=GOOGLE_API_KEY)
+        print("✅ Gemini налаштовано.")
+    except Exception as e:
+        print(f"⚠️ Помилка налаштування Gemini: {e}")
 
-# Налаштування Grok
-grok_client = OpenAI(
-    api_key=GROK_API_KEY,
-    base_url="https://api.x.ai/v1",
-)
-
-# --- ВИПРАВЛЕННЯ ДЛЯ WINDOWS (Критично для edge_tts) ---
+# Виправлення для Windows (щоб не зависало локально)
 if platform.system() == 'Windows':
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 # --- ФУНКЦІЇ ---
 
 async def save_audio(text, filename, voice):
-    """Асинхронне збереження аудіо через edge-tts"""
+    """Зберігає аудіо. Викидає помилку, якщо текст пустий."""
+    if not text or not text.strip():
+        print("❌ ПОМИЛКА: Текст для озвучки пустий!")
+        raise ValueError("Text cannot be empty for TTS generation.")
+    
+    print(f"🎙️ Починаю генерацію аудіо (перші 50 симв.): {text[:50]}...")
     communicate = edge_tts.Communicate(text, voice)
     await communicate.save(filename)
+    print(f"✅ Аудіо збережено: {filename}")
 
 def call_gemini(text, instruction):
-    """Виклик Gemini з налаштуваннями безпеки як у термінальному коді"""
-    safety_settings = {
-        HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
-        HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
-        HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
-        HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
-    }
-    
-    model = genai.GenerativeModel('gemini-2.0-flash', safety_settings=safety_settings)
-    
-    # Формуємо повний промпт
-    full_prompt = f"{instruction}\n\nText to process: {text}"
-    
-    response = model.generate_content(full_prompt)
-    return response.text.strip()
+    """Викликає Gemini API."""
+    try:
+        model = genai.GenerativeModel('gemini-2.0-flash')
+        full_prompt = f"{instruction}\n\nText: {text}"
+        response = model.generate_content(full_prompt)
+        
+        if not response.parts:
+            print("⚠️ Gemini повернув порожню відповідь (можливо, фільтри безпеки).")
+            return None
+            
+        return response.text.strip()
+    except Exception as e:
+        print(f"⚠️ Помилка виклику Gemini: {e}")
+        return None
 
-def call_grok(text, instruction):
-    """Виклик Grok"""
-    full_prompt = f"{instruction}\n\nText to process: {text}"
-    completion = grok_client.chat.completions.create(
-        model="grok-2-latest",
-        messages=[
-            {"role": "system", "content": "You are a creative assistant."},
-            {"role": "user", "content": full_prompt}
-        ]
-    )
-    return completion.choices[0].message.content.strip()
-
-# --- МАРШРУТИ САЙТУ ---
+# --- МАРШРУТИ ---
 
 @app.route('/')
 def home():
@@ -74,6 +65,7 @@ def home():
 
 @app.route('/generate', methods=['POST'])
 def generate():
+    print("\n--- НОВИЙ ЗАПИТ ---")
     data = request.json
     text = data.get('text')
     voice = data.get('voice', 'en-US-ChristopherNeural')
@@ -81,46 +73,51 @@ def generate():
     instruction = data.get('instruction', '')
 
     if not text:
-        return jsonify({"error": "No text provided"}), 400
+        return jsonify({"error": "Введіть текст!"}), 400
+
+    print(f"📥 Отримано текст: {text[:30]}...")
+    print(f"🤖 Модель: {model_name}, Голос: {voice}")
+
+    # 1. Логіка обробки тексту
+    processed_text = text  # За замовчуванням беремо оригінал
+    
+    # Спробуємо використати ШІ тільки якщо вибрано Gemini і є ключ
+    if "gemini" in model_name:
+        if GOOGLE_API_KEY:
+            ai_result = call_gemini(text, instruction)
+            if ai_result:
+                processed_text = ai_result
+                print("✨ Текст успішно оброблено через ШІ.")
+            else:
+                print("⚠️ ШІ не спрацював, використовуємо оригінальний текст.")
+        else:
+            print("⚠️ Немає ключа GOOGLE_API_KEY, пропускаємо ШІ.")
+
+    # 2. ФІНАЛЬНА СТРАХОВКА
+    # Якщо processed_text раптом став None або пустим — вертаємо оригінал
+    if not processed_text or not processed_text.strip():
+        print("⚠️ Увага! Оброблений текст пустий. Відкат до оригіналу.")
+        processed_text = text
+
+    # Якщо і оригінал був пустим (хоча перевірка вище це ловить), ставимо заглушку
+    if not processed_text or not processed_text.strip():
+        processed_text = "System error. No text provided."
 
     try:
-        # 1. Обробка тексту через AI
-        processed_text = text # За замовчуванням
+        # 3. Генерація файлу
+        filename = f"audio_{uuid.uuid4()}.mp3"
         
-        if "grok" in model_name:
-            if GROK_API_KEY:
-                print("🤖 Використовую GROK...")
-                processed_text = call_grok(text, instruction)
-            else:
-                return jsonify({"error": "Grok API Key missing"}), 500
-        else:
-            if GOOGLE_API_KEY:
-                print("🤖 Використовую GEMINI...")
-                processed_text = call_gemini(text, instruction)
-            else:
-                # Якщо ключа немає, використовуємо оригінальний текст (як у термінальному коді)
-                print("⚠️ API ключ відсутній. Озвучую оригінальний текст.")
-                processed_text = text
-
-        # 2. Генерація імені файлу (Timestamp)
-        now = datetime.datetime.now()
-        timestamp = now.strftime("%Y%m%d_%H%M%S")
-        filename = f"audio_{timestamp}.mp3"
-        
-        # 3. Створення аудіо файлу
-        # Використовуємо asyncio.run для виклику асинхронної функції в синхронному Flask
+        # Виклик асинхронної функції
         asyncio.run(save_audio(processed_text, filename, voice))
 
-        # 4. ВАЖЛИВО: Повертаємо JSON з назвою файлу (як хоче твій JS), а не сам файл
         return jsonify({"filename": filename})
 
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"🔥 КРИТИЧНА ПОМИЛКА: {e}")
         return jsonify({"error": str(e)}), 500
 
 @app.route('/download/<filename>')
 def download_file(filename):
-    """Окремий маршрут для скачування файлу"""
     try:
         return send_file(filename, as_attachment=True)
     except Exception as e:

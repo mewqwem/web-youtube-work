@@ -1,5 +1,6 @@
 {
     "model": "Gemini 2.0 Flash",
     "voice": "🇺🇸 Christopher (Male)",
-    "instruction": "Translate to English"
+    "instruction": "Translate to English",
+    "download_path": "C:/Users/roadt/Desktop"
 }

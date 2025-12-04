@@ -4,402 +4,399 @@ from tkinter import filedialog
 import os
 import threading
 import asyncio
-import uuid
-import sys
-import platform
+import datetime
 import json
-from datetime import datetime
+import requests
+import time
+import platform
 from dotenv import load_dotenv
 import google.generativeai as genai
+from google.generativeai.types import HarmCategory, HarmBlockThreshold
 from openai import OpenAI
 import edge_tts
 
-# --- CONFIGURATION ---
+# --- КОНФІГУРАЦІЯ ---
 load_dotenv()
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
-GROK_API_KEY = os.getenv("GROK_API_KEY")
+GROK_API_KEY = os.getenv("GROK_API_KEY") 
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY") 
+GENAIPRO_API_KEY = os.getenv("GENAIPRO_API_KEY")
+
+GENAIPRO_BASE_URL = "https://genaipro.vn/api/v1"
+GENAIPRO_TASK_URL = f"{GENAIPRO_BASE_URL}/labs/task"
+GENAIPRO_VOICES_URL = f"{GENAIPRO_BASE_URL}/labs/voices" 
+
 SETTINGS_FILE = "settings.json"
 
-# Appearance settings
-ctk.set_appearance_mode("Dark")
+# Налаштування безпеки
+SAFETY_SETTINGS = {
+    HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
+    HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
+    HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
+    HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
+}
+
+ctk.set_appearance_mode("Light")
 ctk.set_default_color_theme("blue")
 
 class AudioApp(ctk.CTk):
     def __init__(self):
         super().__init__()
 
-        # Window setup
-        self.title("AI Audio Studio (English Version)")
-        self.geometry("750x780") 
+        self.title("AI Audio Studio (Story & Rewrite)")
+        self.geometry("750x850") 
         self.resizable(True, True)
 
         self.setup_api()
         self.saved_settings = self.load_settings()
 
-        # === INTERFACE ===
+        # === ІНТЕРФЕЙС ===
         
-        # 1. Header
-        self.title_label = ctk.CTkLabel(self, text="🎙️ AI Audio Generator", font=("Roboto", 24, "bold"))
+        self.title_label = ctk.CTkLabel(self, text="🎙️ AI Generator Studio", font=("Roboto", 24, "bold"))
         self.title_label.pack(pady=20)
 
-        # 2. Settings Block
+        # 1. Налаштування (Модель і Голос)
         self.settings_frame = ctk.CTkFrame(self)
         self.settings_frame.pack(pady=10, padx=20, fill="x")
 
-        # AI Model
         self.lbl_model = ctk.CTkLabel(self.settings_frame, text="AI Model:", font=("Arial", 14))
         self.lbl_model.grid(row=0, column=0, padx=10, pady=10, sticky="w")
-        self.combo_model = ctk.CTkComboBox(self.settings_frame, values=["Gemini 2.0 Flash", "Grok 2 (xAI)"], width=200)
+        
+        # ОНОВЛЕНО СПИСОК МОДЕЛЕЙ
+        self.combo_model = ctk.CTkComboBox(self.settings_frame, values=["Gemini 2.5 Pro", "Gemini 2.5 Flash"], width=200)
         self.combo_model.grid(row=0, column=1, padx=10, pady=10)
-        self.combo_model.set(self.saved_settings.get("model", "Gemini 2.0 Flash"))
+        self.combo_model.set(self.saved_settings.get("model", "Gemini 2.5 Pro"))
 
-        # Voice
         self.lbl_voice = ctk.CTkLabel(self.settings_frame, text="Voice:", font=("Arial", 14))
         self.lbl_voice.grid(row=1, column=0, padx=10, pady=10, sticky="w")
         
-        # Windows Flag Fix (Windows doesn't support flag emojis well)
         if platform.system() == "Windows":
-            flags = {"US": "[US]", "UA": "[UA]", "DE": "[DE]", "PL": "[PL]"}
+            self.flags = {"US": "[US]", "UA": "[UA]", "DE": "[DE]", "AI": "[AI]", "VN": "[VN]"}
         else:
-            flags = {"US": "🇺🇸", "UA": "🇺🇦", "DE": "🇩🇪", "PL": "🇵🇱"}
+            self.flags = {"US": "🇺🇸", "UA": "🇺🇦", "DE": "🇩🇪", "AI": "🤖", "VN": "🇻🇳"}
 
         self.voices_map = {
-            f"{flags['US']} Christopher (Male)": "en-US-ChristopherNeural",
-            f"{flags['US']} Jenny (Female)": "en-US-JennyNeural",
-            f"{flags['UA']} Ostap (Male)": "uk-UA-OstapNeural",
-            f"{flags['UA']} Polina (Female)": "uk-UA-PolinaNeural",
-            f"{flags['DE']} Christoph (Male)": "de-DE-ChristophNeural",
-            f"{flags['PL']} Marek (Male)": "pl-PL-MarekNeural"
+            f"{self.flags['US']} Christopher (Edge Free)": "edge|en-US-ChristopherNeural",
+            f"{self.flags['US']} Jenny (Edge Free)": "edge|en-US-JennyNeural",
+            f"{self.flags['UA']} Ostap (Edge Free)": "edge|uk-UA-OstapNeural",
+            f"{self.flags['DE']} Conrad (Edge Free)": "edge|de-DE-ConradNeural",
+            f"{self.flags['VN']} Konrad (Germany)": "genaipro|NlRO8ABjJNJNYaRaLiPJ",
+            f"{self.flags['AI']} Alloy (OpenAI)": "openai|alloy",
+            f"{self.flags['DE']} Killian (Edge Free)": "edge|de-DE-KillianNeural"
         }
+        
         self.combo_voice = ctk.CTkComboBox(self.settings_frame, values=list(self.voices_map.keys()), width=200)
         self.combo_voice.grid(row=1, column=1, padx=10, pady=10)
-        
-        # Restore saved voice or default
-        saved_voice = self.saved_settings.get("voice", "")
-        if saved_voice in self.voices_map:
-            self.combo_voice.set(saved_voice)
-        else:
-            self.combo_voice.set(list(self.voices_map.keys())[0])
+        self.restore_voice_selection()
 
-        # Mode
-        self.lbl_mode = ctk.CTkLabel(self.settings_frame, text="Mode:", font=("Arial", 14, "bold"))
-        self.lbl_mode.grid(row=2, column=0, padx=10, pady=15, sticky="w")
+        # 2. Назва папки/файлу
+        self.file_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self.file_frame.pack(pady=5, padx=20, fill="x")
+        self.lbl_filename = ctk.CTkLabel(self.file_frame, text="Назва (для папки):", font=("Arial", 14, "bold"))
+        self.lbl_filename.pack(side="left", padx=(0, 10))
+        self.entry_filename = ctk.CTkEntry(self.file_frame, placeholder_text="Project_Name", height=35)
+        self.entry_filename.pack(side="left", fill="x", expand=True)
+        self.entry_filename.insert(0, self.saved_settings.get("last_filename", ""))
 
-        self.mode_switch = ctk.CTkSegmentedButton(self.settings_frame, values=["Text Rewrite", "Create from Scratch"],
-                                                                    command=self.change_mode)
-        self.mode_switch.grid(row=2, column=1, padx=10, pady=15, sticky="ew")
-        self.mode_switch.set("Text Rewrite")
+        # 3. ВКЛАДКИ (Tabs) для режимів
+        self.tabview = ctk.CTkTabview(self, width=700, height=400)
+        self.tabview.pack(pady=10, padx=20, fill="both", expand=True)
 
-        # Instruction Frame
-        self.instr_frame = ctk.CTkFrame(self.settings_frame, fg_color="transparent")
-        self.instr_frame.grid(row=3, column=0, columnspan=3, sticky="ew")
+        # Вкладка 1: Story Loop
+        self.tab_story = self.tabview.add("Story (Loop)")
+        self.setup_story_tab()
 
-        self.lbl_instr = ctk.CTkLabel(self.instr_frame, text="Instruction:", font=("Arial", 14))
-        self.lbl_instr.grid(row=0, column=0, padx=10, pady=5, sticky="nw") 
-        
-        self.entry_instr = ctk.CTkTextbox(self.instr_frame, height=60, width=350, font=("Arial", 12))
-        self.entry_instr.grid(row=0, column=1, padx=10, pady=5)
-        self.entry_instr.insert("1.0", self.saved_settings.get("instruction", "Translate to English and improve style."))
+        # Вкладка 2: Rewrite
+        self.tab_rewrite = self.tabview.add("Rewrite (One-shot)")
+        self.setup_rewrite_tab()
 
-        self.btn_paste_instr = ctk.CTkButton(self.instr_frame, text="Paste", width=60, height=25, 
-                                                             command=lambda: self.paste_to_widget(self.entry_instr))
-        self.btn_paste_instr.grid(row=0, column=2, padx=5, pady=5, sticky="n")
+        # 4. Головна кнопка
+        self.bottom_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self.bottom_frame.pack(pady=20, padx=20, fill="x")
 
-        # 3. Main Text Field
-        self.text_header_frame = ctk.CTkFrame(self, fg_color="transparent")
-        self.text_header_frame.pack(pady=(10, 5), padx=20, fill="x")
-
-        self.lbl_text = ctk.CTkLabel(self.text_header_frame, text="Your Text:", font=("Arial", 14, "bold"))
-        self.lbl_text.pack(side="left")
-
-        # Text Control Buttons
-        self.btn_paste_text = ctk.CTkButton(self.text_header_frame, text="Paste", width=100, height=25, 
-                                                            command=lambda: self.paste_to_widget(self.textbox))
-        self.btn_paste_text.pack(side="right", padx=5)
-
-        self.btn_clear_text = ctk.CTkButton(self.text_header_frame, text="Clear", width=100, height=25,
-                                                            fg_color="#555555", hover_color="#333333",
-                                                            command=self.clear_textbox)
-        self.btn_clear_text.pack(side="right", padx=5)
-
-        self.textbox = ctk.CTkTextbox(self, height=200, font=("Arial", 14))
-        self.textbox.pack(pady=5, padx=20, fill="both", expand=True)
-
-        # Context Menu
-        self.context_menu = tk.Menu(self, tearoff=0)
-        self.context_menu.add_command(label="Paste", command=self.paste_text_menu)
-        self.context_menu.add_command(label="Copy", command=self.copy_text_menu)
-        self.context_menu.add_command(label="Cut", command=self.cut_text_menu)
-        self.context_menu.add_separator()
-        self.context_menu.add_command(label="Clear All", command=self.clear_text_menu)
-
-        self.setup_text_bindings(self.textbox)
-        self.setup_text_bindings(self.entry_instr)
-        self.active_widget = None
-
-        # 4. Action Buttons
-        self.buttons_frame = ctk.CTkFrame(self, fg_color="transparent")
-        self.buttons_frame.pack(pady=20, padx=20, fill="x")
-
-        # Folder selection button
-        self.btn_folder = ctk.CTkButton(self.buttons_frame, text="📂", width=50, height=50, 
-                                        font=("Arial", 20), fg_color="#444444", hover_color="#555555",
+        self.btn_folder = ctk.CTkButton(self.bottom_frame, text="📂", width=50, height=50, 
+                                        font=("Arial", 20), fg_color="#DDDDDD", text_color="black", hover_color="#BBBBBB",
                                         command=self.select_folder)
         self.btn_folder.pack(side="right", padx=(10, 0))
 
-        # Generate Button
-        self.btn_generate = ctk.CTkButton(self.buttons_frame, text="Generate Audio", font=("Arial", 16, "bold"), height=50, command=self.start_generation)
+        self.btn_generate = ctk.CTkButton(self.bottom_frame, text="ГЕНЕРАЦІЯ ТА ОЗВУЧКА", font=("Arial", 16, "bold"), height=50, fg_color="#0066CC", command=self.start_process)
         self.btn_generate.pack(side="left", fill="x", expand=True)
 
-        self.lbl_status = ctk.CTkLabel(self, text="Ready", text_color="gray")
+        self.lbl_status = ctk.CTkLabel(self, text="Очікування...", text_color="gray")
         self.lbl_status.pack(pady=5)
-
         self.progressbar = ctk.CTkProgressBar(self, mode="indeterminate")
 
-        # Show current folder
-        current_path = self.saved_settings.get("download_path", "")
-        if current_path:
-            self.lbl_status.configure(text=f"📂 Folder: {current_path}", text_color="gray")
+        if GENAIPRO_API_KEY:
+            threading.Thread(target=self.fetch_genaipro_voices, daemon=True).start()
 
-    # --- FOLDER SELECTION ---
-    def select_folder(self):
-        folder_selected = filedialog.askdirectory()
-        if folder_selected:
-            self.saved_settings["download_path"] = folder_selected
-            self.save_settings()
-            self.lbl_status.configure(text=f"📂 Folder changed: {folder_selected}", text_color="#00ff00")
-
-    # --- INTERFACE LOGIC ---
-    def change_mode(self, value):
-        if value == "Text Rewrite":
-            self.instr_frame.grid(row=3, column=0, columnspan=3, sticky="ew")
-            self.lbl_text.configure(text="Your text (to process):")
-            self.entry_instr.configure(state="normal")
-        else:
-            self.instr_frame.grid_forget()
-            self.lbl_text.configure(text="Your prompt (topic, idea):")
-            
-    def clear_textbox(self):
-        self.textbox.delete("1.0", "end")
-
-    # --- SETTINGS LOGIC ---
-    def load_settings(self):
-        try:
-            if os.path.exists(SETTINGS_FILE):
-                with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
-                    return json.load(f)
-        except: pass
-        return {} 
-
-    def save_settings(self):
-        settings = {
-            "model": self.combo_model.get(),
-            "voice": self.combo_voice.get(),
-            "instruction": self.entry_instr.get("1.0", "end").strip(),
-            "download_path": self.saved_settings.get("download_path", "")
-        }
-        try:
-            with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
-                json.dump(settings, f, ensure_ascii=False, indent=4)
-        except: pass
-
-    # --- SHORTCUTS LOGIC ---
-    def setup_text_bindings(self, widget):
-        widget.bind("<Button-3>", lambda event: self.show_context_menu(event, widget))
-        widget.bind("<Button-2>", lambda event: self.show_context_menu(event, widget))
+    def setup_story_tab(self):
+        """Елементи для вкладки створення історії"""
+        lbl = ctk.CTkLabel(self.tab_story, text="Промпт для історії (з правилами Continue/END):", font=("Arial", 12))
+        lbl.pack(pady=(5, 5), anchor="w")
         
-        if platform.system() == "Darwin": modifier = "Command"
-        else: modifier = "Control"
+        self.textbox_story = ctk.CTkTextbox(self.tab_story, height=250, font=("Arial", 12))
+        self.textbox_story.pack(fill="both", expand=True, padx=5, pady=5)
+        
+        btn_paste = ctk.CTkButton(self.tab_story, text="Вставити", width=80, height=25, command=lambda: self.paste_to_widget(self.textbox_story))
+        btn_paste.pack(pady=5, anchor="e")
 
-        widget.bind(f"<{modifier}-v>", lambda event: self.handle_paste(event, widget))
-        widget.bind(f"<{modifier}-c>", lambda event: self.handle_copy(event, widget))
-        widget.bind(f"<{modifier}-x>", lambda event: self.handle_cut(event, widget))
+    def setup_rewrite_tab(self):
+        """Елементи для вкладки рерайту"""
+        # Інструкція
+        lbl_instr = ctk.CTkLabel(self.tab_rewrite, text="Інструкція (як переписати):", font=("Arial", 12, "bold"))
+        lbl_instr.pack(pady=(5, 0), anchor="w")
+        
+        self.entry_instruction = ctk.CTkEntry(self.tab_rewrite, placeholder_text="Наприклад: Перепиши це в стилі Карла Юнга, зроби текст більш емоційним...", height=40)
+        self.entry_instruction.pack(fill="x", padx=5, pady=5)
 
-    def show_context_menu(self, event, target_widget):
-        self.active_widget = target_widget
-        try: self.context_menu.tk_popup(event.x_root, event.y_root)
-        finally: self.context_menu.grab_release()
+        # Текст
+        lbl_text = ctk.CTkLabel(self.tab_rewrite, text="Текст для перепису:", font=("Arial", 12))
+        lbl_text.pack(pady=(5, 0), anchor="w")
+
+        self.textbox_rewrite = ctk.CTkTextbox(self.tab_rewrite, height=200, font=("Arial", 12))
+        self.textbox_rewrite.pack(fill="both", expand=True, padx=5, pady=5)
+        
+        btn_paste = ctk.CTkButton(self.tab_rewrite, text="Вставити", width=80, height=25, command=lambda: self.paste_to_widget(self.textbox_rewrite))
+        btn_paste.pack(pady=5, anchor="e")
+
+    # --- ЛОГІКА ---
+
+    def start_process(self):
+        filename = self.entry_filename.get().strip()
+        if not filename:
+            self.lbl_status.configure(text="❌ Помилка: Вкажи назву (filename)!", text_color="red")
+            return
+
+        # Визначаємо активну вкладку
+        active_tab = self.tabview.get()
+        process_data = {}
+
+        if active_tab == "Story (Loop)":
+            prompt = self.textbox_story.get("1.0", "end").strip()
+            if not prompt:
+                self.lbl_status.configure(text="❌ Помилка: Промпт історії порожній!", text_color="red")
+                return
+            process_data = {"mode": "story", "prompt": prompt}
+
+        elif active_tab == "Rewrite (One-shot)":
+            instruction = self.entry_instruction.get().strip()
+            source_text = self.textbox_rewrite.get("1.0", "end").strip()
+            if not source_text:
+                self.lbl_status.configure(text="❌ Помилка: Немає тексту для рерайту!", text_color="red")
+                return
+            # Інструкція може бути порожньою (тоді просто рерайт), але краще мати
+            process_data = {"mode": "rewrite", "instruction": instruction, "text": source_text}
+
+        self.save_settings()
+        self.btn_generate.configure(state="disabled", text="Працюю...")
+        self.progressbar.pack(pady=5, padx=50, fill="x")
+        self.progressbar.start()
+        
+        threading.Thread(target=self.run_pipeline, args=(process_data, filename), daemon=True).start()
+
+    def run_pipeline(self, process_data, filename):
+        try:
+            if platform.system() == 'Windows':
+                asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+            asyncio.run(self.async_pipeline(process_data, filename))
+        except Exception as e:
+            self.show_error(str(e))
+
+    async def async_pipeline(self, data, filename):
+        try:
+            model_choice = self.combo_model.get()
+            voice_choice = self.combo_voice.get()
+            
+            # --- ОНОВЛЕНИЙ ВИБІР МОДЕЛІ ---
+            if "Pro" in model_choice:
+                api_model = 'gemini-2.5-pro'
+            else:
+                api_model = 'gemini-2.5-flash'
+
+            model = genai.GenerativeModel(api_model)
+            full_story_text = ""
+
+            # === ЛОГІКА ГЕНЕРАЦІЇ ===
+            
+            if data["mode"] == "rewrite":
+                # РЕЖИМ РЕРАЙТУ (Один запит)
+                self.update_status(f"🤖 Переписую текст...", "blue")
+                
+                instruction = data.get("instruction", "Rewrite this text.")
+                source_text = data.get("text", "")
+                
+                # Формуємо єдиний промпт
+                final_prompt = f"INSTRUCTION:\n{instruction}\n\nSOURCE TEXT TO REWRITE:\n{source_text}"
+                
+                response = model.generate_content(final_prompt, safety_settings=SAFETY_SETTINGS)
+                full_story_text = response.text.strip()
+                
+            else:
+                # РЕЖИМ ІСТОРІЇ (Loop/Цикл)
+                self.update_status(f"🤖 Пишу історію (Loop)...", "blue")
+                chat = model.start_chat(history=[])
+                current_msg = data["prompt"]
+                part_count = 0
+                
+                while True:
+                    part_count += 1
+                    self.update_status(f"🤖 Генерація частини {part_count}...", "blue")
+                    
+                    response = chat.send_message(current_msg, safety_settings=SAFETY_SETTINGS)
+                    raw_text = response.text.strip()
+                    
+                    clean_text = raw_text
+                    is_end = False
+                    if "END" in clean_text:
+                        clean_text = clean_text.replace("END", "")
+                        is_end = True
+                    
+                    # Чистка сміття
+                    clean_text = clean_text.replace("Type 'Continue' to receive the next part.", "")
+                    clean_text = clean_text.replace("Type “Continue” to receive the next part.", "")
+                    clean_text = clean_text.replace("Type Continue to receive the next part.", "")
+                    clean_text = clean_text.replace("Type ‘Continue’ to receive the next part.", "")
+                    
+                    full_story_text += clean_text + "\n"
+                    
+                    if is_end or part_count > 40:
+                        break
+                    
+                    current_msg = "Continue"
+                    time.sleep(1)
+
+            if not full_story_text.strip():
+                raise Exception("AI повернув порожній текст.")
+
+            # === ЗБЕРЕЖЕННЯ ТА ОЗВУЧКА (Спільне для обох режимів) ===
+            
+            timestamp = datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+            base_path = self.saved_settings.get("download_path", os.getcwd())
+            folder_name = f"{filename}_{timestamp}"
+            target_folder = os.path.join(base_path, folder_name)
+            os.makedirs(target_folder, exist_ok=True)
+
+            text_path = os.path.join(target_folder, "story.txt")
+            with open(text_path, "w", encoding="utf-8") as f:
+                f.write(full_story_text)
+
+            self.update_status("🎙️ Генерую аудіо...", "blue")
+            audio_path = os.path.join(target_folder, "audio.mp3")
+            
+            voice_raw = self.voices_map[voice_choice]
+            provider, voice_id = voice_raw.split("|")
+
+            if provider == "openai":
+                if not self.openai_tts_client: raise Exception("Немає OPENAI_API_KEY")
+                await asyncio.to_thread(self.generate_openai, full_story_text, voice_id, audio_path)
+            elif provider == "genaipro":
+                if not GENAIPRO_API_KEY: raise Exception("Немає GENAIPRO_API_KEY")
+                await asyncio.to_thread(self.generate_genaipro, full_story_text, voice_id, audio_path, self.update_status)
+            else: # Edge
+                communicate = edge_tts.Communicate(full_story_text, voice_id)
+                await communicate.save(audio_path)
+
+            self.finish_success(target_folder)
+
+        except Exception as e:
+            self.show_error(str(e))
+
+    # --- ДОПОМІЖНІ ФУНКЦІЇ ---
 
     def paste_to_widget(self, widget):
         try: widget.insert("insert", self.clipboard_get())
         except: pass
 
-    def handle_paste(self, event, widget):
-        try:
-            widget.insert("insert", self.clipboard_get())
-            return "break"
-        except: pass
+    def generate_openai(self, text, voice, path):
+        resp = self.openai_tts_client.audio.speech.create(model="tts-1", voice=voice, input=text)
+        resp.stream_to_file(path)
 
-    def handle_copy(self, event, widget):
-        try:
-            self.clipboard_clear()
-            self.clipboard_append(widget.get("sel.first", "sel.last"))
-            return "break"
-        except: pass
-
-    def handle_cut(self, event, widget):
-        try:
-            self.handle_copy(event, widget)
-            widget.delete("sel.first", "sel.last")
-            return "break"
-        except: pass
-
-    def paste_text_menu(self):
-        if self.active_widget: self.paste_to_widget(self.active_widget)
-    def copy_text_menu(self):
-        if self.active_widget: self.handle_copy(None, self.active_widget)
-    def cut_text_menu(self):
-        if self.active_widget: self.handle_cut(None, self.active_widget)
-    def clear_text_menu(self):
-        if self.active_widget: self.active_widget.delete("1.0", "end")
-
-    # --- AI LOGIC ---
-    def setup_api(self):
-        if GOOGLE_API_KEY:
-            try: genai.configure(api_key=GOOGLE_API_KEY)
-            except: pass
-        self.grok_client = None
-        if GROK_API_KEY:
-            try: self.grok_client = OpenAI(api_key=GROK_API_KEY, base_url="https://api.x.ai/v1")
-            except: pass
-
-    def start_generation(self):
-        main_input = self.textbox.get("1.0", "end").strip()
-        if not main_input:
-            self.lbl_status.configure(text="❌ Error: Text field is empty!", text_color="red")
-            return
+    def generate_genaipro(self, text, voice, path, status_callback):
+        headers = {"Authorization": f"Bearer {GENAIPRO_API_KEY}", "Content-Type": "application/json"}
+        # ТУТ ДОДАНО ПАРАМЕТРИ speed І style
+        data = {
+            "input": text[:10000], 
+            "voice_id": voice, 
+            "model_id": "eleven_multilingual_v2",
+            "speed": 1,
+            "style": 0.5
+        }
         
-        self.save_settings()
-        self.btn_generate.configure(state="disabled", text="Generating...")
-        self.progressbar.pack(pady=5, padx=50, fill="x")
-        self.progressbar.start()
-        self.lbl_status.configure(text="⏳ AI is working...", text_color="orange")
+        r = requests.post(GENAIPRO_TASK_URL, json=data, headers=headers)
+        if r.status_code != 200: raise Exception(f"GenAI Error: {r.text}")
+        
+        task_id = r.json().get("task_id")
+        check_url = f"{GENAIPRO_TASK_URL}/{task_id}"
+        
+        for i in range(600): 
+            time.sleep(2)
+            r_check = requests.get(check_url, headers=headers)
+            if r_check.status_code == 200:
+                url = r_check.json().get("result")
+                if url:
+                    with open(path, 'wb') as f: f.write(requests.get(url).content)
+                    return
+        raise Exception("GenAI Timeout")
 
-        threading.Thread(target=self.run_async_process, args=(main_input,), daemon=True).start()
+    def setup_api(self):
+        if GOOGLE_API_KEY: genai.configure(api_key=GOOGLE_API_KEY)
+        self.openai_tts_client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 
-    def run_async_process(self, input_text):
+    def load_settings(self):
+        try: return json.load(open(SETTINGS_FILE, "r", encoding="utf-8")) if os.path.exists(SETTINGS_FILE) else {}
+        except: return {}
+
+    def save_settings(self):
+        s = {"model": self.combo_model.get(), "voice": self.combo_voice.get(), 
+             "download_path": self.saved_settings.get("download_path", ""), 
+             "last_filename": self.entry_filename.get()}
+        try: json.dump(s, open(SETTINGS_FILE, "w", encoding="utf-8"), indent=4)
+        except: pass
+
+    def restore_voice_selection(self):
+        v = self.saved_settings.get("voice", "")
+        if v in self.voices_map: self.combo_voice.set(v)
+
+    def fetch_genaipro_voices(self):
         try:
-            if platform.system() == 'Windows':
-                asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-            asyncio.run(self.process_and_generate(input_text))
-        except Exception as e:
-            self.show_error(str(e))
+            h = {"Authorization": f"Bearer {GENAIPRO_API_KEY}"}
+            r = requests.get(f"{GENAIPRO_VOICES_URL}?page_size=100", headers=h)
+            if r.status_code == 200:
+                voices = r.json().get("voices", [])
+                for v in voices:
+                    label = f"{self.flags['VN']} {v.get('name')} (GenAI)"
+                    self.voices_map[label] = f"genaipro|{v.get('voice_id')}"
+                self.after(0, lambda: self.combo_voice.configure(values=list(self.voices_map.keys())))
+        except: pass
 
-    async def process_and_generate(self, input_text):
-        try:
-            model_choice = self.combo_model.get()
-            voice_code = self.voices_map[self.combo_voice.get()]
-            mode = self.mode_switch.get()
-            
-            final_audio_text = ""
+    def select_folder(self):
+        f = filedialog.askdirectory()
+        if f: self.saved_settings["download_path"] = f; self.save_settings()
 
-            if mode == "Text Rewrite":
-                instruction = self.entry_instr.get("1.0", "end").strip()
-                final_user_prompt = f"User Instruction: {instruction}\n\nText to process: {input_text}"
-                
-                if "Gemini" in model_choice:
-                    self.update_status("🤖 Gemini thinking...", "cyan")
-                    final_audio_text = self.call_gemini_oneshot(final_user_prompt) or input_text
-                elif "Grok" in model_choice:
-                    self.update_status("🤖 Grok thinking...", "cyan")
-                    final_audio_text = self.call_grok_oneshot(final_user_prompt) or input_text
-            
-            else: 
-                if "Gemini" in model_choice:
-                    final_audio_text = self.process_long_generation_gemini(input_text)
-                elif "Grok" in model_choice:
-                    final_audio_text = self.process_long_generation_grok(input_text)
-                
-                if not final_audio_text:
-                    raise Exception("API returned no text (Possible SSL issue).")
+    def update_status(self, m, c): 
+        self.after(0, lambda: self.lbl_status.configure(text=m, text_color=c))
 
-            self.update_status(f"🎙️ Voicing ({len(final_audio_text)} chars)...", "cyan")
-
-            # GENERATE FILE PATH
-            filename = f"audio_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp3"
-            
-            download_path = self.saved_settings.get("download_path", "")
-            if download_path and os.path.exists(download_path):
-                full_path = os.path.join(download_path, filename)
-            else:
-                full_path = filename
-
-            communicate = edge_tts.Communicate(final_audio_text, voice_code)
-            await communicate.save(full_path)
-
-            self.finish_success(full_path)
-        except Exception as e:
-            self.show_error(str(e))
-
-    # --- API METHODS ---
-    def call_gemini_oneshot(self, prompt):
-        try:
-            model = genai.GenerativeModel('gemini-2.0-flash')
-            response = model.generate_content(prompt)
-            return response.text.strip()
-        except Exception as e:
-            print(f"Gemini Error: {e}")
-            return None
-
-    def call_grok_oneshot(self, prompt):
-        try:
-            completion = self.grok_client.chat.completions.create(
-                model="grok-2-latest",
-                messages=[{"role": "user", "content": prompt}]
-            )
-            return completion.choices[0].message.content.strip()
-        except Exception as e:
-            print(f"Grok Error: {e}")
-            return None
-
-    def process_long_generation_gemini(self, initial_prompt):
-        try:
-            model = genai.GenerativeModel('gemini-2.0-flash')
-            chat = model.start_chat(history=[])
-            full_audio_text = ""
-            current_prompt = initial_prompt
-            
-            for i in range(15):
-                self.update_status(f"🤖 Gemini writing part {i+1}...", "cyan")
-                response = chat.send_message(current_prompt)
-                raw_text = response.text
-                
-                if "Type ‘Continue’" not in raw_text and "END" not in raw_text:
-                     full_audio_text += raw_text + " "
-
-                if "END" in raw_text: break
-                current_prompt = "Continue"
-            return full_audio_text
-        except Exception as e:
-            raise Exception(f"Gemini Error: {e}")
-
-    def process_long_generation_grok(self, initial_prompt):
-        return self.call_grok_oneshot(initial_prompt)
-
-    def update_status(self, message, color):
-        self.after(0, lambda: self.lbl_status.configure(text=message, text_color=color))
-
-    def finish_success(self, filename):
-        def _update():
+    def finish_success(self, folder):
+        def _u():
             self.progressbar.stop()
             self.progressbar.pack_forget()
-            self.btn_generate.configure(state="normal", text="Generate Audio")
-            self.lbl_status.configure(text=f"✅ Done! Saved: {filename}", text_color="#00ff00")
-            self.open_file(filename)
-        self.after(0, _update)
+            self.btn_generate.configure(state="normal", text="ГЕНЕРАЦІЯ ТА ОЗВУЧКА")
+            self.lbl_status.configure(text="✅ Готово! Файли збережено.", text_color="green")
+            self.open_folder(folder)
+        self.after(0, _u)
 
-    def show_error(self, message):
-        def _update():
+    def show_error(self, m):
+        def _u():
             self.progressbar.stop()
             self.progressbar.pack_forget()
-            self.btn_generate.configure(state="normal", text="Generate Audio")
-            self.lbl_status.configure(text=f"❌ Error: {message}", text_color="red")
-        self.after(0, _update)
+            self.btn_generate.configure(state="normal", text="ГЕНЕРАЦІЯ ТА ОЗВУЧКА")
+            self.lbl_status.configure(text=f"❌ Помилка: {m}", text_color="red")
+        self.after(0, _u)
 
-    def open_file(self, filename):
-        if platform.system() == "Windows": os.startfile(filename)
-        elif platform.system() == "Darwin": os.system(f"open {filename}")
-        else: os.system(f"xdg-open {filename}")
+    def open_folder(self, p):
+        if platform.system() == "Windows": os.startfile(p)
+        elif platform.system() == "Darwin": os.system(f"open {p}")
+        else: os.system(f"xdg-open {p}")
 
 if __name__ == "__main__":
     app = AudioApp()
